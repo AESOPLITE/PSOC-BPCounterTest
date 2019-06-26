@@ -157,7 +157,7 @@ int main(void)
 //                }
 //
 //                /* Send data back to host. */
-               USBUART_CD_PutData(TransmitBuffer, strlen(TransmitBuffer));
+//               USBUART_CD_PutData(TransmitBuffer, strlen(TransmitBuffer));
 //                NewTransmit = FALSE;
 //
 //
