@@ -15,6 +15,9 @@
 #include "stdio.h"
 #include "string.h"
 
+#define MIN(a,b) (((a)<(b))?(a):(b))
+#define MAX(a,b) (((a)>(b))?(a):(b))
+
 // From LROA103.ASM
 //;The format for the serial command is:
 //; S1234<sp>xyWS1234<sp>xyWS1234<sp>xyW<cr><lf>
@@ -24,10 +27,12 @@
 //; S & W are literal format characters,<sp> = space, xy = CIP address (ignored).
 //; 9 characters are repeated 3 times followed by a carriage return - line feed,
 //; and all alpha characters must be capitalized, baud rate = 1200.
-#define START_COMMAND   (unit8)('S') //Start command string before the 4 command char 
-#define END_COMMAND     (unit8*)(" 01W") //End command string after the 4 command char, CIP is 01 which is ignored
-#define CR    (unit8)(0x0Du) //Carriage return in hex
-#define LF    (unit8)(0x0Du) //Line feed in hex
+#define START_COMMAND   (uint8*)("S") //Start command string before the 4 command char 
+#define START_COMMAND_SIZE   1u //Size of Start command string before the 4 command char 
+#define END_COMMAND     (uint8*)(" 01W") //End command string after the 4 command char, CIP is 01 which is ignored
+#define END_COMMAND_SIZE     4u //Size of End command string after the 4 command char, CIP is 01 which is ignored
+#define CR    (0x0Du) //Carriage return in hex
+#define LF    (0x0Au) //Line feed in hex
 #define FILLBYTE (0xA3u) //SPI never transmits  so could be anything
 //#define CMDBUFFSIZE 3
 /* Project Defines */
@@ -54,8 +59,10 @@ uint8 buffSPI[NUM_SPI_DEV][SPI_BUFFER_SIZE];
 uint8 buffSPIRead[NUM_SPI_DEV];
 uint8 buffSPIWrite[NUM_SPI_DEV];
 enum readStatus {CHECKDATA, READOUTDATA, EORFOUND, EORERROR};
-uint8 curCmd[4];
+#define COMMAND_CHARS     (4u)
+uint8 curCmd[COMMAND_CHARS];
 uint8 iCurCmd = 0;
+
 
 
 CY_ISR(SPINext)
@@ -76,8 +83,11 @@ int main(void)
 //    uint8 status;
 //    uint8 fillByte = 0xA3u;
 //    cmdBuff[CMDBUFFSIZE - 1] = FILLBYTE;
-    
-    
+    uint8 buffUsbTx[USBUART_BUFFER_SIZE];
+    uint8 iBuffUsbTx = 0;
+    uint8 buffUsbRx[USBUART_BUFFER_SIZE];
+    uint8 iBuffUsbRx = 0;
+    uint8 nBuffUsbRx = 0;
     
     
     SPIM_BP_Start();
@@ -87,7 +97,7 @@ int main(void)
    
     Timer_Tsync_Start();
     Control_Reg_R_Write(0x00u);
-    Control_Reg_SS_Write(0x0Fu);
+    Control_Reg_SS_Write(tabSPISel[0]);
     isr_W_StartEx(SPINext);
     /* Place your initialization/startup code here (e.g. MyInst_Start()) */
 
@@ -121,43 +131,93 @@ int main(void)
 //
 //            SPIM_BP_WriteTxData(fillByte);
         //}
-//         if (0u != USBUART_CD_IsConfigurationChanged())
-//        {
-//            /* Initialize IN endpoints when device is configured. */
-//            if (0u != USBUART_1_GetConfiguration())
-//            {
-//                /* Enumeration is done, enable OUT endpoint to receive data 
-//                 * from host. */
-//                USBUART_1_CDC_Init();
-//            }
-//        }
-//
-//        /* Service USB CDC when device is configured. */
-//        if (0u != USBUART_1_GetConfiguration())
-//        {
-//            /* Check for input data from host. */
-//            if (0u != USBUART_1_DataIsReady())
-//            {
-//                /* Read received data and re-enable OUT endpoint. */
-//                count = USBUART_1_GetAll(buffer);
-//                
-//                Ch = buffer[count-1];
-//
-//            }
-//        }
+    	if (0u != USBUART_CD_IsConfigurationChanged())
+    	{
+    		/* Initialize IN endpoints when device is configured. */
+    		if (0u != USBUART_CD_GetConfiguration())
+    		{
+    			/* Enumeration is done, enable OUT endpoint to receive data 
+    			 * from host. */
+    			USBUART_CD_CDC_Init();
+    		}
+    	}
+
+        /* Service USB CDC when device is configured. */
+        if ((nBuffUsbRx == iBuffUsbRx) && (0u != USBUART_CD_GetConfiguration()))
+        {
+            /* Check for input data from host. */
+            if (0u != USBUART_CD_DataIsReady())
+            {
+                /* Read received data and re-enable OUT endpoint. */
+                nBuffUsbRx = USBUART_CD_GetAll(buffUsbRx);
+                iBuffUsbRx = 0;
+
+            }
+        }
+        
+        if (nBuffUsbRx > iBuffUsbRx)
+        {
+            uint8 nByteCpy =  MIN(COMMAND_CHARS - iCurCmd, nBuffUsbRx - iBuffUsbRx);
+            if (nByteCpy > 0)
+            {
+                memcpy((curCmd + iCurCmd), (buffUsbRx + iBuffUsbRx), nByteCpy);
+                iCurCmd += nByteCpy;
+                iBuffUsbRx += nByteCpy;
+                
+                if ((iCurCmd >= COMMAND_CHARS) && (0u != (UART_Cmd_TX_STS_FIFO_EMPTY | UART_Cmd_ReadTxStatus())))
+                {
+                    uint8 cmdValid = TRUE;
+                    //all nibbles of the command must be uppercase hex char 
+                    for(uint8 x = 0; ((x < COMMAND_CHARS) && cmdValid); x++)
+                    {
+                        if ((!(isxdigit(curCmd[x]))) || (curCmd[x] > 'F'))
+                        {
+                            cmdValid = FALSE; 
+                        }
+                    }
+                    if (cmdValid)
+                    {
+                        //DEBUG echo command no boundary check
+                        memcpy(buffUsbTx, "++", 2);
+                        memcpy(buffUsbTx +2, curCmd, COMMAND_CHARS);
+                        iBuffUsbTx += 6;
+                        //Write 3 times cmd on backplane
+                        for (uint8 x=0; x<3; x++)
+                        {
+                            UART_Cmd_PutArray(START_COMMAND, START_COMMAND_SIZE);
+                            UART_Cmd_PutArray(curCmd, COMMAND_CHARS);
+                            UART_Cmd_PutArray(END_COMMAND, END_COMMAND_SIZE);
+                        }
+                        //Unix style line end
+                        UART_Cmd_PutChar(CR);
+                        UART_Cmd_PutChar(LF);    
+                    }
+                    else 
+                    {
+                        //DEBUG echo command no boundary check
+                        memcpy(buffUsbTx, "--", 2);
+                        memcpy(buffUsbTx +2, curCmd, COMMAND_CHARS);
+                        iBuffUsbTx += 6;
+                    }
+                    iCurCmd = 0;    
+                }
+            }
+        }
 //                if (NewTransmit)
 //        {
-//             /* Service USB CDC when device is configured. */
-//            if (0u != USBUART_1_GetConfiguration())
-//            {
-//     
-//                /* Wait until component is ready to send data to host. */
-//                while (0u == USBUART_1_CDCIsReady())
-//                {
-//                }
-//
-//                /* Send data back to host. */
-//               USBUART_CD_PutData(TransmitBuffer, strlen(TransmitBuffer));
+             /* Service USB CDC when device is configured. */
+        if (0u != USBUART_CD_GetConfiguration())
+        {
+ 
+            /* Wait until component is ready to send data to host. */
+            if (USBUART_CD_CDCIsReady())
+            {
+                USBUART_CD_PutData(buffUsbTx, iBuffUsbTx);
+                iBuffUsbTx = 0;
+            }
+        }
+                /* Send data back to host. */
+               
 //                NewTransmit = FALSE;
 //
 //
