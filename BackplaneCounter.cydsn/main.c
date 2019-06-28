@@ -17,6 +17,8 @@
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
+//#define WRAPINC(a,b) (((a)>=(b-1))?(0):(a + 1))
+#define WRAPINC(a,b) ((a + 1) % (b))
 
 // From LROA103.ASM
 //;The format for the serial command is:
@@ -55,6 +57,7 @@ uint8 iSPIDev = 0u;
 const uint8 tabSPISel[NUM_SPI_DEV] = {CTR1_SEL};
 #define CTR1_HEAD     (0xFAu)
 const uint8 tabSPIHead[NUM_SPI_DEV] = {CTR1_HEAD};
+const uint8 frame00FF[2] = {0x00u, 0xFFu};
 uint8 buffSPI[NUM_SPI_DEV][SPI_BUFFER_SIZE];
 uint8 buffSPIRead[NUM_SPI_DEV];
 uint8 buffSPIWrite[NUM_SPI_DEV];
@@ -76,7 +79,13 @@ CY_ISR(SPINext)
 //        iCmdBuff = CMDBUFFSIZE - 1;
 //        SPIM_BP_WriteTxData(cmdBuff[iCmdBuff]);
 //    }
-    SPIM_BP_WriteTxData(FILLBYTE);
+    uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
+    buffSPIWrite[iSPIDev] = WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
+    buffSPI[iSPIDev][tempBuffWrite] = SPIM_BP_ReadRxData();
+    if ((0u == Pin_nDrdy_Read()) && (buffSPI[iSPIDev][buffSPIWrite[iSPIDev]] != buffSPI[iSPIDev][buffSPIRead[iSPIDev]]))
+    {
+        SPIM_BP_WriteTxData(FILLBYTE);
+    }
 }
 int main(void)
 {
@@ -88,7 +97,7 @@ int main(void)
     uint8 buffUsbRx[USBUART_BUFFER_SIZE];
     uint8 iBuffUsbRx = 0;
     uint8 nBuffUsbRx = 0;
-    
+    enum readStatus readStatusBP = CHECKDATA;
     
     SPIM_BP_Start();
     SPIM_BP_ClearFIFO();
@@ -97,6 +106,7 @@ int main(void)
    
     Timer_Tsync_Start();
     Control_Reg_R_Write(0x00u);
+
     Control_Reg_SS_Write(tabSPISel[0]);
     isr_W_StartEx(SPINext);
     /* Place your initialization/startup code here (e.g. MyInst_Start()) */
@@ -108,6 +118,9 @@ int main(void)
     SPIM_BP_TxDisable();
     
     CyGlobalIntEnable; /* Enable global interrupts. */
+    
+    memset(buffSPIRead, 0, NUM_SPI_DEV);
+    memset(buffSPIWrite, 0, NUM_SPI_DEV);
     
     
     for(;;)
@@ -163,50 +176,127 @@ int main(void)
                 memcpy((curCmd + iCurCmd), (buffUsbRx + iBuffUsbRx), nByteCpy);
                 iCurCmd += nByteCpy;
                 iBuffUsbRx += nByteCpy;
-                
-                if ((iCurCmd >= COMMAND_CHARS) && (0u != (UART_Cmd_TX_STS_FIFO_EMPTY | UART_Cmd_ReadTxStatus())))
-                {
-                    uint8 cmdValid = TRUE;
-                    //all nibbles of the command must be uppercase hex char 
-                    for(uint8 x = 0; ((x < COMMAND_CHARS) && cmdValid); x++)
-                    {
-                        if ((!(isxdigit(curCmd[x]))) || (curCmd[x] > 'F'))
-                        {
-                            cmdValid = FALSE; 
-                        }
-                    }
-                    if (cmdValid)
-                    {
-                        //DEBUG echo command no boundary check
-                        memcpy(buffUsbTx, "++", 2);
-                        memcpy(buffUsbTx +2, curCmd, COMMAND_CHARS);
-                        iBuffUsbTx += 6;
-                        //Write 3 times cmd on backplane
-                        for (uint8 x=0; x<3; x++)
-                        {
-                            UART_Cmd_PutArray(START_COMMAND, START_COMMAND_SIZE);
-                            UART_Cmd_PutArray(curCmd, COMMAND_CHARS);
-                            UART_Cmd_PutArray(END_COMMAND, END_COMMAND_SIZE);
-                        }
-                        //Unix style line end
-                        UART_Cmd_PutChar(CR);
-                        UART_Cmd_PutChar(LF);    
-                    }
-                    else 
-                    {
-                        //DEBUG echo command no boundary check
-                        memcpy(buffUsbTx, "--", 2);
-                        memcpy(buffUsbTx +2, curCmd, COMMAND_CHARS);
-                        iBuffUsbTx += 6;
-                    }
-                    iCurCmd = 0;    
-                }
             }
+                
+            if ((iCurCmd >= COMMAND_CHARS) && (0u != (UART_Cmd_TX_STS_FIFO_EMPTY | UART_Cmd_ReadTxStatus())))
+            {
+                uint8 cmdValid = TRUE;
+                //all nibbles of the command must be uppercase hex char 
+                for(uint8 x = 0; ((x < COMMAND_CHARS) && cmdValid); x++)
+                {
+                    if ((!(isxdigit(curCmd[x]))) || (curCmd[x] > 'F'))
+                    {
+                        cmdValid = FALSE; 
+                    }
+                }
+                if (cmdValid)
+                {
+                    //DEBUG echo command no boundary check
+                    memcpy(buffUsbTx, "++", 2);
+                    memcpy(buffUsbTx +2, curCmd, COMMAND_CHARS);
+                    iBuffUsbTx += 6;
+                    //Write 3 times cmd on backplane
+                    for (uint8 x=0; x<3; x++)
+                    {
+                        UART_Cmd_PutArray(START_COMMAND, START_COMMAND_SIZE);
+                        UART_Cmd_PutArray(curCmd, COMMAND_CHARS);
+                        UART_Cmd_PutArray(END_COMMAND, END_COMMAND_SIZE);
+                    }
+                    //Unix style line end
+                    UART_Cmd_PutChar(CR);
+                    UART_Cmd_PutChar(LF);    
+                }
+                else 
+                {
+                    //DEBUG echo command no boundary check
+                    memcpy(buffUsbTx, "--", 2);
+                    memcpy(buffUsbTx + 2, curCmd, COMMAND_CHARS);
+                    iBuffUsbTx += 6;
+                }
+                iCurCmd = 0;    
+            }
+            
+        }
+        
+        switch (readStatusBP)
+        {
+            case CHECKDATA:
+                if (0u == Pin_nDrdy_Read())
+                {
+                    buffSPI[iSPIDev][buffSPIWrite[iSPIDev]] = tabSPIHead[iSPIDev];
+                    buffSPIWrite[iSPIDev]++;
+                    memcpy(&(buffSPI[iSPIDev][buffSPIWrite[iSPIDev]]), frame00FF, 2);
+                    buffSPIWrite[iSPIDev] += 2;
+                    SPIM_BP_WriteTxData(FILLBYTE);
+                    readStatusBP = READOUTDATA;
+                }
+                else
+                {  
+//                    if (iSPIDev >= (NUM_SPI_DEV - 1))
+//                    {
+//                        iSPIDev = 0;
+//                    }
+//                    else
+//                    {
+//                        iSPIDev++;
+//                    }
+                    iSPIDev = WRAPINC(iSPIDev, NUM_SPI_DEV);
+                    Control_Reg_SS_Write(tabSPISel[iSPIDev]);
+                }
+                break;
+                
+            case READOUTDATA:
+                if (1u == Pin_nDrdy_Read())
+                {
+                    uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
+                    
+                    uint8 nBytes;
+                    
+                    if (buffSPIRead[iSPIDev] >= tempBuffWrite)
+                    {
+                        nBytes = SPI_BUFFER_SIZE - buffSPIRead[iSPIDev];
+                        memcpy(buffUsbTx + iBuffUsbTx, &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
+                        iBuffUsbTx += nBytes;
+                        buffSPIRead[iSPIDev] = 0;
+                    }
+                    nBytes = tempBuffWrite - buffSPIRead[iSPIDev];
+                    memcpy(buffUsbTx + iBuffUsbTx, &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
+                    iBuffUsbTx += nBytes;
+                    buffSPIRead[iSPIDev] = tempBuffWrite;
+                    readStatusBP = EORFOUND;
+                }
+                else if (buffSPIRead[iSPIDev] == buffSPIWrite[iSPIDev])
+                {
+                                        
+                    uint8 nBytes = SPI_BUFFER_SIZE - buffSPIRead[iSPIDev];
+                    
+                    
+                    memcpy(buffUsbTx + iBuffUsbTx, &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
+                    iBuffUsbTx += nBytes;
+                    if (nBytes < SPI_BUFFER_SIZE)
+                    {
+                        nBytes = SPI_BUFFER_SIZE - nBytes;
+                        memcpy(buffUsbTx + iBuffUsbTx, &(buffSPI[iSPIDev][0]), nBytes);
+                        iBuffUsbTx += nBytes;
+                    }
+                    readStatusBP = EORERROR;
+                }
+                break;
+                
+            case EORERROR:
+            case EORFOUND:  
+                if (0u != (SPIM_BP_STS_SPI_IDLE | SPIM_BP_ReadTxStatus()))
+                {
+                    iSPIDev = WRAPINC(iSPIDev, NUM_SPI_DEV);
+                    Control_Reg_SS_Write(tabSPISel[iSPIDev]);
+                    readStatusBP = CHECKDATA;
+                }
+                break;
         }
 //                if (NewTransmit)
 //        {
              /* Service USB CDC when device is configured. */
-        if (0u != USBUART_CD_GetConfiguration())
+        if ((0u != USBUART_CD_GetConfiguration()) && (iBuffUsbTx > 0))
         {
  
             /* Wait until component is ready to send data to host. */

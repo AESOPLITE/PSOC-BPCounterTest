@@ -328,6 +328,7 @@
     <Group key="Pin">
       <Data key="8d318d8b-cf7b-4b6b-b02c-ab1c5c49d0ba" value="Pin_Data" />
       <Data key="67b2a294-8197-4890-915f-bfd555ac4a36" value="Pin_Sel" />
+      <Data key="332a34eb-67b8-4d46-87de-0efeb718eb7c" value="Pin_1" />
       <Data key="833abd8e-8ed0-49a6-87f7-8438e64659e4" value="Pin_Mclk" />
       <Data key="965e2327-8b1d-41c1-a0d7-3c3acab975f0" value="Pin_nRackRst" />
       <Data key="040256ac-f59f-4d1b-95c7-1add247bde30" value="Pin_Tsync" />
@@ -3423,9 +3424,19 @@
     </Group>
   </Group>
   <Group key="Pin2">
+    <Group key="8d318d8b-cf7b-4b6b-b02c-ab1c5c49d0ba">
+      <Group key="0">
+        <Data key="Port Format" value="15,4" />
+      </Group>
+    </Group>
     <Group key="67b2a294-8197-4890-915f-bfd555ac4a36">
       <Group key="0">
         <Data key="Port Format" value="2,6" />
+      </Group>
+    </Group>
+    <Group key="332a34eb-67b8-4d46-87de-0efeb718eb7c">
+      <Group key="0">
+        <Data key="Port Format" value="1,6" />
       </Group>
     </Group>
     <Group key="833abd8e-8ed0-49a6-87f7-8438e64659e4">
