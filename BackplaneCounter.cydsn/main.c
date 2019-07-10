@@ -19,7 +19,7 @@
 #define MAX(a,b) (((a)>(b))?(a):(b))
 //#define WRAPINC(a,b) (((a)>=(b-1))?(0):(a + 1))
 #define WRAPINC(a,b) ((a + 1) % (b))
-
+#define WRAP3INC(a,b) ((a + 3) % (b))
 // From LROA103.ASM
 //;The format for the serial command is:
 //; S1234<sp>xyWS1234<sp>xyWS1234<sp>xyW<cr><lf>
@@ -80,11 +80,17 @@ CY_ISR(SPINext)
 //        SPIM_BP_WriteTxData(cmdBuff[iCmdBuff]);
 //    }
     uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
-    buffSPIWrite[iSPIDev] = WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
-    buffSPI[iSPIDev][tempBuffWrite] = SPIM_BP_ReadRxData();
-    if ((0u == Pin_nDrdy_Read()) && (buffSPI[iSPIDev][buffSPIWrite[iSPIDev]] != buffSPI[iSPIDev][buffSPIRead[iSPIDev]]))
+    if (tempBuffWrite != buffSPIRead[iSPIDev]) //Check if buffer is full
     {
-        SPIM_BP_WriteTxData(FILLBYTE);
+        buffSPIWrite[iSPIDev] = WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
+        if (0u !=(SPIM_BP_RX_STATUS_REG & SPIM_BP_STS_RX_FIFO_NOT_EMPTY))
+        {
+            buffSPI[iSPIDev][tempBuffWrite] = SPIM_BP_ReadRxData();
+        }
+        if ((0u == Pin_nDrdy_Read()))
+        {
+            SPIM_BP_WriteTxData(FILLBYTE);
+        }
     }
 }
 int main(void)
@@ -99,6 +105,8 @@ int main(void)
     uint8 nBuffUsbRx = 0;
     enum readStatus readStatusBP = CHECKDATA;
     
+    uint16 tempSpinTimer = 0; //TODO replace
+    
     SPIM_BP_Start();
     SPIM_BP_ClearFIFO();
     USBUART_CD_Start(USBFS_DEVICE, USBUART_CD_5V_OPERATION);
@@ -107,7 +115,8 @@ int main(void)
     Timer_Tsync_Start();
     Control_Reg_R_Write(0x00u);
 
-    Control_Reg_SS_Write(tabSPISel[0]);
+    Control_Reg_SS_Write(tabSPISel[0u]);
+    Control_Reg_CD_Write(1u);
     isr_W_StartEx(SPINext);
     /* Place your initialization/startup code here (e.g. MyInst_Start()) */
 
@@ -223,12 +232,23 @@ int main(void)
             case CHECKDATA:
                 if (0u == Pin_nDrdy_Read())
                 {
-                    buffSPI[iSPIDev][buffSPIWrite[iSPIDev]] = tabSPIHead[iSPIDev];
-                    buffSPIWrite[iSPIDev]++;
-                    memcpy(&(buffSPI[iSPIDev][buffSPIWrite[iSPIDev]]), frame00FF, 2);
-                    buffSPIWrite[iSPIDev] += 2;
+                    uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
+                    Control_Reg_CD_Write(0u);
+                    buffSPIWrite[iSPIDev] = WRAP3INC(tempBuffWrite, SPI_BUFFER_SIZE);
+                    buffSPI[iSPIDev][tempBuffWrite] = tabSPIHead[iSPIDev];
+                    tempBuffWrite=WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
+                    if((SPI_BUFFER_SIZE - 1) == tempBuffWrite) //check for 2 byte wrap
+                    {
+                        buffSPI[iSPIDev][(SPI_BUFFER_SIZE - 1)] = frame00FF[0];
+                        buffSPI[iSPIDev][0] = frame00FF[1];
+                    }
+                    else
+                    {
+                        memcpy(&(buffSPI[iSPIDev][tempBuffWrite]), frame00FF, 2);
+                    }
                     SPIM_BP_WriteTxData(FILLBYTE);
                     readStatusBP = READOUTDATA;
+                    tempSpinTimer = 0;
                 }
                 else
                 {  
@@ -240,12 +260,19 @@ int main(void)
 //                    {
 //                        iSPIDev++;
 //                    }
-                    iSPIDev = WRAPINC(iSPIDev, NUM_SPI_DEV);
-                    Control_Reg_SS_Write(tabSPISel[iSPIDev]);
+                    if (0x0FFFu == ++tempSpinTimer)
+                    {
+                        Control_Reg_CD_Write(0u);
+                        iSPIDev = WRAPINC(iSPIDev, NUM_SPI_DEV);
+                        Control_Reg_SS_Write(tabSPISel[iSPIDev]);
+                        Control_Reg_CD_Write(1u);
+                        tempSpinTimer = 0;
+                    }
                 }
                 break;
                 
             case READOUTDATA:
+                //TODO actually check 3 byte EOR, count errrors 
                 if (1u == Pin_nDrdy_Read())
                 {
                     uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
@@ -255,12 +282,12 @@ int main(void)
                     if (buffSPIRead[iSPIDev] >= tempBuffWrite)
                     {
                         nBytes = SPI_BUFFER_SIZE - buffSPIRead[iSPIDev];
-                        memcpy(buffUsbTx + iBuffUsbTx, &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
+                        memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
                         iBuffUsbTx += nBytes;
                         buffSPIRead[iSPIDev] = 0;
                     }
                     nBytes = tempBuffWrite - buffSPIRead[iSPIDev];
-                    memcpy(buffUsbTx + iBuffUsbTx, &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
+                    memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
                     iBuffUsbTx += nBytes;
                     buffSPIRead[iSPIDev] = tempBuffWrite;
                     readStatusBP = EORFOUND;
@@ -271,12 +298,12 @@ int main(void)
                     uint8 nBytes = SPI_BUFFER_SIZE - buffSPIRead[iSPIDev];
                     
                     
-                    memcpy(buffUsbTx + iBuffUsbTx, &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
+                    memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
                     iBuffUsbTx += nBytes;
                     if (nBytes < SPI_BUFFER_SIZE)
                     {
                         nBytes = SPI_BUFFER_SIZE - nBytes;
-                        memcpy(buffUsbTx + iBuffUsbTx, &(buffSPI[iSPIDev][0]), nBytes);
+                        memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][0]), nBytes);
                         iBuffUsbTx += nBytes;
                     }
                     readStatusBP = EORERROR;
@@ -285,11 +312,41 @@ int main(void)
                 
             case EORERROR:
             case EORFOUND:  
+                
                 if (0u != (SPIM_BP_STS_SPI_IDLE | SPIM_BP_ReadTxStatus()))
                 {
-                    iSPIDev = WRAPINC(iSPIDev, NUM_SPI_DEV);
-                    Control_Reg_SS_Write(tabSPISel[iSPIDev]);
-                    readStatusBP = CHECKDATA;
+                    if (0u !=(SPIM_BP_RX_STATUS_REG & SPIM_BP_STS_RX_FIFO_NOT_EMPTY)) //Readout any further bytes
+                    {   
+                        
+                        uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
+                        buffSPIWrite[iSPIDev] = WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
+                        buffSPI[iSPIDev][tempBuffWrite] = SPIM_BP_ReadRxData();
+                    }
+                    else
+                    {
+                        if (buffSPIRead[iSPIDev] != buffSPIWrite[iSPIDev])
+                        {
+                            uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
+                    
+                            uint8 nBytes;
+                            
+                            if (buffSPIRead[iSPIDev] >= tempBuffWrite)
+                            {
+                                nBytes = SPI_BUFFER_SIZE - buffSPIRead[iSPIDev];
+                                memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
+                                iBuffUsbTx += nBytes;
+                                buffSPIRead[iSPIDev] = 0;
+                            }
+                            nBytes = tempBuffWrite - buffSPIRead[iSPIDev];
+                            memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
+                            iBuffUsbTx += nBytes;
+                            buffSPIRead[iSPIDev] = tempBuffWrite;
+                        }
+                        iSPIDev = WRAPINC(iSPIDev, NUM_SPI_DEV);
+                        Control_Reg_SS_Write(tabSPISel[iSPIDev]);
+                        Control_Reg_CD_Write(1u);
+                        readStatusBP = CHECKDATA;
+                    }
                 }
                 break;
         }
