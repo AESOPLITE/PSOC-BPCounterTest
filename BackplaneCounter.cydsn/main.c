@@ -65,7 +65,8 @@ enum readStatus {CHECKDATA, READOUTDATA, EORFOUND, EORERROR};
 #define COMMAND_CHARS     (4u)
 uint8 curCmd[COMMAND_CHARS];
 uint8 iCurCmd = 0;
-
+volatile uint8 continueRead = FALSE;
+const uint8 continueReadFlags = (SPIM_BP_STS_SPI_IDLE | SPIM_BP_STS_TX_FIFO_EMPTY);
 
 
 CY_ISR(SPINext)
@@ -83,14 +84,16 @@ CY_ISR(SPINext)
     if (tempBuffWrite != buffSPIRead[iSPIDev]) //Check if buffer is full
     {
         buffSPIWrite[iSPIDev] = WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
-        if (0u !=(SPIM_BP_RX_STATUS_REG & SPIM_BP_STS_RX_FIFO_NOT_EMPTY))
+        if (0u != (SPIM_BP_RX_STATUS_REG & SPIM_BP_STS_RX_FIFO_NOT_EMPTY))
         {
             buffSPI[iSPIDev][tempBuffWrite] = SPIM_BP_ReadRxData();
         }
-        if ((0u == Pin_nDrdy_Read()))
+        //if ((0u == Pin_nDrdy_Read()) && (0u != (SPIM_BP_TX_STATUS_REG & SPIM_BP_STS_TX_FIFO_EMPTY)) && (buffSPIWrite[iSPIDev] != buffSPIRead[iSPIDev]))
+        if ((1u == Pin_nDrdy_Read()) || (buffSPIWrite[iSPIDev] == buffSPIRead[iSPIDev]))
         {
-            SPIM_BP_WriteTxData(FILLBYTE);
+            continueRead = FALSE;
         }
+        
     }
 }
 int main(void)
@@ -112,6 +115,17 @@ int main(void)
     USBUART_CD_Start(USBFS_DEVICE, USBUART_CD_5V_OPERATION);
     UART_Cmd_Start();
    
+           /* Service USB CDC when device is configured. */
+    if ((0u != USBUART_CD_GetConfiguration()) && (iBuffUsbTx > 0))
+    {
+
+        /* Wait until component is ready to send data to host. */
+        if (USBUART_CD_CDCIsReady())
+        {
+            USBUART_CD_PutChar('S'); //TODO  different or eliminate startup message
+        }
+    }
+    
     Timer_Tsync_Start();
     Control_Reg_R_Write(0x00u);
 
@@ -230,7 +244,7 @@ int main(void)
         switch (readStatusBP)
         {
             case CHECKDATA:
-                if (0u == Pin_nDrdy_Read())
+                if ((0u == Pin_nDrdy_Read()) && (0u != (SPIM_BP_TX_STATUS_REG & SPIM_BP_STS_TX_FIFO_EMPTY)))
                 {
                     uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
                     Control_Reg_CD_Write(0u);
@@ -247,6 +261,7 @@ int main(void)
                         memcpy(&(buffSPI[iSPIDev][tempBuffWrite]), frame00FF, 2);
                     }
                     SPIM_BP_WriteTxData(FILLBYTE);
+                    continueRead = TRUE;
                     readStatusBP = READOUTDATA;
                     tempSpinTimer = 0;
                 }
@@ -273,7 +288,24 @@ int main(void)
                 
             case READOUTDATA:
                 //TODO actually check 3 byte EOR, count errrors 
-                if (1u == Pin_nDrdy_Read())
+                Control_Reg_CD_Write(0u);
+                if (TRUE == continueRead)
+                {
+                    //if (continueReadFlags == (continueReadFlags | SPIM_BP_TX_STATUS_REG))
+                    if ((0u != (SPIM_BP_STS_SPI_IDLE | SPIM_BP_TX_STATUS_REG)))
+                    {
+                        if (0u != (SPIM_BP_STS_TX_FIFO_EMPTY | SPIM_BP_TX_STATUS_REG))
+                        {
+                            if (0x0005 == ++tempSpinTimer)
+                            {
+                                SPIM_BP_WriteTxData(FILLBYTE);
+                                tempSpinTimer = 0;
+                            }
+                            
+                        }
+                    }
+                }
+                else if ((1u == Pin_nDrdy_Read()) && (0u != (SPIM_BP_STS_SPI_IDLE | SPIM_BP_TX_STATUS_REG)))
                 {
                     uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
                     
@@ -308,12 +340,26 @@ int main(void)
                     }
                     readStatusBP = EORERROR;
                 }
+                else 
+                {
+                    if (0u != (SPIM_BP_STS_SPI_IDLE | SPIM_BP_TX_STATUS_REG))
+                    {
+                        if (0x0FFFu == ++tempSpinTimer)
+                        {
+                            readStatusBP = EORERROR;
+                        }
+                    }
+                    else
+                    {
+                        tempSpinTimer = 0;
+                    }
+                }
                 break;
                 
             case EORERROR:
             case EORFOUND:  
-                
-                if (0u != (SPIM_BP_STS_SPI_IDLE | SPIM_BP_ReadTxStatus()))
+                Control_Reg_CD_Write(0u);
+                if (0u != (SPIM_BP_STS_SPI_IDLE | SPIM_BP_TX_STATUS_REG))
                 {
                     if (0u !=(SPIM_BP_RX_STATUS_REG & SPIM_BP_STS_RX_FIFO_NOT_EMPTY)) //Readout any further bytes
                     {   
@@ -360,9 +406,10 @@ int main(void)
             if (USBUART_CD_CDCIsReady())
             {
                 USBUART_CD_PutData(buffUsbTx, iBuffUsbTx);
-                iBuffUsbTx = 0;
+                //iBuffUsbTx = 0;
             }
         }
+        iBuffUsbTx = 0; //TODO handle missed writes
                 /* Send data back to host. */
                
 //                NewTransmit = FALSE;
