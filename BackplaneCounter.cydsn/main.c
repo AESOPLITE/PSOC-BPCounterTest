@@ -65,11 +65,14 @@ enum readStatus {CHECKDATA, READOUTDATA, EORFOUND, EORERROR};
 #define COMMAND_CHARS     (4u)
 uint8 curCmd[COMMAND_CHARS];
 uint8 iCurCmd = 0;
-volatile uint8 continueRead = FALSE;
-const uint8 continueReadFlags = (SPIM_BP_STS_SPI_IDLE | SPIM_BP_STS_TX_FIFO_EMPTY);
+volatile uint8 timeoutDrdy = FALSE;
+volatile uint8 lastDrdyCap = 0u;
+#define MIN_DRDY_CYCLES 8
+//volatile uint8 continueRead = FALSE;
+//const uint8 continueReadFlags = (SPIM_BP_STS_SPI_IDLE | SPIM_BP_STS_TX_FIFO_EMPTY);
 
 
-CY_ISR(SPINext)
+CY_ISR(ISRReadSPI)
 {
 //    if (iCmdBuff < CMDBUFFSIZE - 1)
 //    {
@@ -80,22 +83,62 @@ CY_ISR(SPINext)
 //        iCmdBuff = CMDBUFFSIZE - 1;
 //        SPIM_BP_WriteTxData(cmdBuff[iCmdBuff]);
 //    }
+    uint8 tempnDrdy = Pin_nDrdy_Read();
     uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
     if (tempBuffWrite != buffSPIRead[iSPIDev]) //Check if buffer is full
     {
         buffSPIWrite[iSPIDev] = WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
+         //if ((0u == Pin_nDrdy_Read()) && (0u != (SPIM_BP_TX_STATUS_REG & SPIM_BP_STS_TX_FIFO_EMPTY)) && (buffSPIWrite[iSPIDev] != buffSPIRead[iSPIDev]))
+        if ((0u != tempnDrdy) || (buffSPIWrite[iSPIDev] == buffSPIRead[iSPIDev]))
+        {
+            //continueRead = FALSE;
+            Control_Reg_CD_Write(0x00u);
+            SPIM_BP_ClearTxBuffer();
+        }
+        else 
+        {
+            Control_Reg_CD_Write(0x02u);
+        }
+        
         if (0u != (SPIM_BP_RX_STATUS_REG & SPIM_BP_STS_RX_FIFO_NOT_EMPTY))
         {
             buffSPI[iSPIDev][tempBuffWrite] = SPIM_BP_ReadRxData();
         }
-        //if ((0u == Pin_nDrdy_Read()) && (0u != (SPIM_BP_TX_STATUS_REG & SPIM_BP_STS_TX_FIFO_EMPTY)) && (buffSPIWrite[iSPIDev] != buffSPIRead[iSPIDev]))
-        if ((1u == Pin_nDrdy_Read()) || (buffSPIWrite[iSPIDev] == buffSPIRead[iSPIDev]))
-        {
-            continueRead = FALSE;
-        }
+       
         
     }
+    else 
+    {
+        Control_Reg_CD_Write(0x00u);
+        SPIM_BP_ClearTxBuffer();
+    }
 }
+CY_ISR(ISRWriteSPI)
+{
+    if (0u != (SPIM_BP_STS_TX_FIFO_EMPTY | SPIM_BP_TX_STATUS_REG))
+    {
+        SPIM_BP_WriteTxData(FILLBYTE);
+    }
+}
+CY_ISR(ISRDrdyCap)
+{
+    if (0u != (Timer_Drdy_STATUS & Timer_Drdy_STATUS_CAPTURE))
+    {
+        uint8 tempCap = Timer_Drdy_ReadCapture();
+        if (0u == Pin_nDrdy_Read())
+        {
+            lastDrdyCap = tempCap;
+        }
+    }
+    if (0u != (Timer_Drdy_STATUS & Timer_Drdy_STATUS_TC))
+    {
+        if ((0u != Pin_nDrdy_Read()) || (lastDrdyCap < MIN_DRDY_CYCLES))
+        {
+            timeoutDrdy = TRUE;
+        }
+    }
+}
+
 int main(void)
 {
 //    uint8 status;
@@ -108,7 +151,7 @@ int main(void)
     uint8 nBuffUsbRx = 0;
     enum readStatus readStatusBP = CHECKDATA;
     
-    uint16 tempSpinTimer = 0; //TODO replace
+//    uint16 tempSpinTimer = 0; //TODO replace
     
     SPIM_BP_Start();
     SPIM_BP_ClearFIFO();
@@ -127,11 +170,15 @@ int main(void)
     }
     
     Timer_Tsync_Start();
+    Timer_SelLow_Start();
+    Timer_Drdy_Start();
     Control_Reg_R_Write(0x00u);
 
     Control_Reg_SS_Write(tabSPISel[0u]);
     Control_Reg_CD_Write(1u);
-    isr_W_StartEx(SPINext);
+    lastDrdyCap = 0xFFu;
+    isr_R_StartEx(ISRReadSPI);
+    isr_W_StartEx(ISRWriteSPI);
     /* Place your initialization/startup code here (e.g. MyInst_Start()) */
 
 //    cmdBuff[0] = 0x0Fu;
@@ -244,28 +291,45 @@ int main(void)
         switch (readStatusBP)
         {
             case CHECKDATA:
-                if ((0u == Pin_nDrdy_Read()) && (0u != (SPIM_BP_TX_STATUS_REG & SPIM_BP_STS_TX_FIFO_EMPTY)))
+                if(0u == (Timer_Drdy_ReadControlRegister() & Timer_Drdy_CTRL_ENABLE ))
                 {
-                    uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
-                    Control_Reg_CD_Write(0u);
-                    buffSPIWrite[iSPIDev] = WRAP3INC(tempBuffWrite, SPI_BUFFER_SIZE);
-                    buffSPI[iSPIDev][tempBuffWrite] = tabSPIHead[iSPIDev];
-                    tempBuffWrite=WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
-                    if((SPI_BUFFER_SIZE - 1) == tempBuffWrite) //check for 2 byte wrap
-                    {
-                        buffSPI[iSPIDev][(SPI_BUFFER_SIZE - 1)] = frame00FF[0];
-                        buffSPI[iSPIDev][0] = frame00FF[1];
-                    }
-                    else
-                    {
-                        memcpy(&(buffSPI[iSPIDev][tempBuffWrite]), frame00FF, 2);
-                    }
-                    SPIM_BP_WriteTxData(FILLBYTE);
-                    continueRead = TRUE;
-                    readStatusBP = READOUTDATA;
-                    tempSpinTimer = 0;
+                    Timer_Drdy_Start();
+                    Control_Reg_CD_Write(0x01u);
+                    lastDrdyCap = 0xFFu;
                 }
-                else
+                if (0u == Pin_nDrdy_Read())
+                {
+                    uint8 tempPeriod = Timer_Drdy_ReadPeriod();
+                    if (tempPeriod > lastDrdyCap) tempPeriod = 0;
+                    //if ((0u == Pin_nDrdy_Read()) && (0u != (SPIM_BP_TX_STATUS_REG & SPIM_BP_STS_TX_FIFO_EMPTY)))
+                    if ((lastDrdyCap - tempPeriod) >= MIN_DRDY_CYCLES)
+                    {
+                        uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
+                        Control_Reg_CD_Write(0x03u);
+                        SPIM_BP_WriteTxData(FILLBYTE);
+                        buffSPIWrite[iSPIDev] = WRAP3INC(tempBuffWrite, SPI_BUFFER_SIZE);
+                        buffSPI[iSPIDev][tempBuffWrite] = tabSPIHead[iSPIDev];
+                        tempBuffWrite=WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
+                        if((SPI_BUFFER_SIZE - 1) == tempBuffWrite) //check for 2 byte wrap
+                        {
+                            buffSPI[iSPIDev][(SPI_BUFFER_SIZE - 1)] = frame00FF[0];
+                            buffSPI[iSPIDev][0] = frame00FF[1];
+                        }
+                        else
+                        {
+                            memcpy(&(buffSPI[iSPIDev][tempBuffWrite]), frame00FF, 2);
+                        }
+                        
+      
+                        
+                        //continueRead = TRUE;
+                        readStatusBP = READOUTDATA;
+                        timeoutDrdy = FALSE;
+                        lastDrdyCap = 0xFFu;
+//                        tempSpinTimer = 0;
+                    }
+                }
+                else if (TRUE == timeoutDrdy)
                 {  
 //                    if (iSPIDev >= (NUM_SPI_DEV - 1))
 //                    {
@@ -275,85 +339,92 @@ int main(void)
 //                    {
 //                        iSPIDev++;
 //                    }
-                    if (0x0FFFu == ++tempSpinTimer)
-                    {
-                        Control_Reg_CD_Write(0u);
-                        iSPIDev = WRAPINC(iSPIDev, NUM_SPI_DEV);
-                        Control_Reg_SS_Write(tabSPISel[iSPIDev]);
-                        Control_Reg_CD_Write(1u);
-                        tempSpinTimer = 0;
-                    }
+//                    if (0x0FFFu == ++tempSpinTimer)
+//                    {
+                    Control_Reg_CD_Write(0u);
+                    iSPIDev = WRAPINC(iSPIDev, NUM_SPI_DEV);
+                    Control_Reg_SS_Write(tabSPISel[iSPIDev]);
+                    Control_Reg_CD_Write(1u);
+                    timeoutDrdy = FALSE;
+                    lastDrdyCap = 0xFFu;
+//                    tempSpinTimer = 0;
+//                    }
                 }
                 break;
                 
             case READOUTDATA:
                 //TODO actually check 3 byte EOR, count errrors 
-                Control_Reg_CD_Write(0u);
-                if (TRUE == continueRead)
+//                Control_Reg_CD_Write(0u);
+//                if (TRUE == continueRead)
+//                {
+//                    //if (continueReadFlags == (continueReadFlags | SPIM_BP_TX_STATUS_REG))
+//                    if ((0u != (SPIM_BP_STS_SPI_IDLE | SPIM_BP_TX_STATUS_REG)))
+//                    {
+//                        if (0u != (SPIM_BP_STS_TX_FIFO_EMPTY | SPIM_BP_TX_STATUS_REG))
+//                        {
+//                            if (0x0005 == ++tempSpinTimer)
+//                            {
+//                                SPIM_BP_WriteTxData(FILLBYTE);
+//                                tempSpinTimer = 0;
+//                            }
+//                            
+//                        }
+//                    }
+//                }
+                if (0u != (0x02 & Control_Reg_CD_Read()))
                 {
-                    //if (continueReadFlags == (continueReadFlags | SPIM_BP_TX_STATUS_REG))
-                    if ((0u != (SPIM_BP_STS_SPI_IDLE | SPIM_BP_TX_STATUS_REG)))
+                    if (buffSPIRead[iSPIDev] == buffSPIWrite[iSPIDev])
                     {
-                        if (0u != (SPIM_BP_STS_TX_FIFO_EMPTY | SPIM_BP_TX_STATUS_REG))
-                        {
-                            if (0x0005 == ++tempSpinTimer)
-                            {
-                                SPIM_BP_WriteTxData(FILLBYTE);
-                                tempSpinTimer = 0;
-                            }
-                            
-                        }
-                    }
-                }
-                else if ((1u == Pin_nDrdy_Read()) && (0u != (SPIM_BP_STS_SPI_IDLE | SPIM_BP_TX_STATUS_REG)))
-                {
-                    uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
-                    
-                    uint8 nBytes;
-                    
-                    if (buffSPIRead[iSPIDev] >= tempBuffWrite)
-                    {
-                        nBytes = SPI_BUFFER_SIZE - buffSPIRead[iSPIDev];
+                                            
+                        uint8 nBytes = SPI_BUFFER_SIZE - buffSPIRead[iSPIDev];
+                        
+                        
                         memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
                         iBuffUsbTx += nBytes;
-                        buffSPIRead[iSPIDev] = 0;
-                    }
-                    nBytes = tempBuffWrite - buffSPIRead[iSPIDev];
-                    memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
-                    iBuffUsbTx += nBytes;
-                    buffSPIRead[iSPIDev] = tempBuffWrite;
-                    readStatusBP = EORFOUND;
-                }
-                else if (buffSPIRead[iSPIDev] == buffSPIWrite[iSPIDev])
-                {
-                                        
-                    uint8 nBytes = SPI_BUFFER_SIZE - buffSPIRead[iSPIDev];
-                    
-                    
-                    memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
-                    iBuffUsbTx += nBytes;
-                    if (nBytes < SPI_BUFFER_SIZE)
-                    {
-                        nBytes = SPI_BUFFER_SIZE - nBytes;
-                        memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][0]), nBytes);
-                        iBuffUsbTx += nBytes;
-                    }
-                    readStatusBP = EORERROR;
-                }
-                else 
-                {
-                    if (0u != (SPIM_BP_STS_SPI_IDLE | SPIM_BP_TX_STATUS_REG))
-                    {
-                        if (0x0FFFu == ++tempSpinTimer)
+                        if (nBytes < SPI_BUFFER_SIZE)
                         {
-                            readStatusBP = EORERROR;
+                            nBytes = SPI_BUFFER_SIZE - nBytes;
+                            memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][0]), nBytes);
+                            iBuffUsbTx += nBytes;
                         }
+                        readStatusBP = EORERROR;
                     }
+                    //if ((1u == Pin_nDrdy_Read()) && (0u != (SPIM_BP_STS_SPI_IDLE | SPIM_BP_TX_STATUS_REG)))
                     else
                     {
-                        tempSpinTimer = 0;
+                        uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
+                        
+                        uint8 nBytes;
+                        
+                        if (buffSPIRead[iSPIDev] >= tempBuffWrite)
+                        {
+                            nBytes = SPI_BUFFER_SIZE - buffSPIRead[iSPIDev];
+                            memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
+                            iBuffUsbTx += nBytes;
+                            buffSPIRead[iSPIDev] = 0;
+                        }
+                        nBytes = tempBuffWrite - buffSPIRead[iSPIDev];
+                        memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
+                        iBuffUsbTx += nBytes;
+                        buffSPIRead[iSPIDev] = tempBuffWrite;
+                        readStatusBP = EORFOUND;
                     }
+                     
                 }
+//                else 
+//                {
+//                    if (0u != (SPIM_BP_STS_SPI_IDLE | SPIM_BP_TX_STATUS_REG))
+//                    {
+//                        if (0x0FFFu == ++tempSpinTimer)
+//                        {
+//                            readStatusBP = EORERROR;
+//                        }
+//                    }
+//                    else
+//                    {
+//                        tempSpinTimer = 0;
+//                    }
+//                }
                 break;
                 
             case EORERROR:
@@ -391,6 +462,7 @@ int main(void)
                         iSPIDev = WRAPINC(iSPIDev, NUM_SPI_DEV);
                         Control_Reg_SS_Write(tabSPISel[iSPIDev]);
                         Control_Reg_CD_Write(1u);
+                        lastDrdyCap = 0xFFu;
                         readStatusBP = CHECKDATA;
                     }
                 }
