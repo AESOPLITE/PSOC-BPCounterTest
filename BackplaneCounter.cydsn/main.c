@@ -40,7 +40,7 @@
 /* Project Defines */
 #define FALSE  0
 #define TRUE   1
-#define SPI_BUFFER_SIZE  (64u)
+#define SPI_BUFFER_SIZE  (128u)
 //uint8 cmdBuff[CMDBUFFSIZE];
 //uint8 iCmdBuff = CMDBUFFSIZE - 1;
 
@@ -48,7 +48,7 @@
 /* The buffer size is equal to the maximum packet size of the IN and OUT bulk
 * endpoints.
 */
-#define USBUART_BUFFER_SIZE (64u)
+#define USBUART_BUFFER_SIZE (128u)
 #define LINE_STR_LENGTH     (20u)
 
 #define NUM_SPI_DEV     (1u)
@@ -83,6 +83,8 @@ CY_ISR(ISRReadSPI)
 //        iCmdBuff = CMDBUFFSIZE - 1;
 //        SPIM_BP_WriteTxData(cmdBuff[iCmdBuff]);
 //    }
+    uint8 intState = CyEnterCriticalSection();
+
     uint8 tempnDrdy = Pin_nDrdy_Read();
     uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
     if (tempBuffWrite != buffSPIRead[iSPIDev]) //Check if buffer is full
@@ -90,14 +92,20 @@ CY_ISR(ISRReadSPI)
         buffSPIWrite[iSPIDev] = WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
          //if ((0u == Pin_nDrdy_Read()) && (0u != (SPIM_BP_TX_STATUS_REG & SPIM_BP_STS_TX_FIFO_EMPTY)) && (buffSPIWrite[iSPIDev] != buffSPIRead[iSPIDev]))
         if ((0u != tempnDrdy) || (buffSPIWrite[iSPIDev] == buffSPIRead[iSPIDev]))
+//        if ((buffSPIWrite[iSPIDev] == buffSPIRead[iSPIDev]))
         {
             //continueRead = FALSE;
             Control_Reg_CD_Write(0x00u);
-            SPIM_BP_ClearTxBuffer();
+//            SPIM_BP_ClearTxBuffer();
         }
         else 
         {
             Control_Reg_CD_Write(0x02u);
+//            Timer_SelLow_Start();
+            if (0u != (SPIM_BP_STS_TX_FIFO_EMPTY | SPIM_BP_TX_STATUS_REG))
+            {
+                SPIM_BP_WriteTxData(FILLBYTE);
+            }
         }
         
         if (0u != (SPIM_BP_RX_STATUS_REG & SPIM_BP_STS_RX_FIFO_NOT_EMPTY))
@@ -110,19 +118,26 @@ CY_ISR(ISRReadSPI)
     else 
     {
         Control_Reg_CD_Write(0x00u);
-        SPIM_BP_ClearTxBuffer();
+//        SPIM_BP_ClearTxBuffer();
     }
+    CyExitCriticalSection(intState);
 }
 CY_ISR(ISRWriteSPI)
 {
-    if (0u != (SPIM_BP_STS_TX_FIFO_EMPTY | SPIM_BP_TX_STATUS_REG))
-    {
-        SPIM_BP_WriteTxData(FILLBYTE);
-    }
+//    if (0u != (SPIM_BP_STS_TX_FIFO_EMPTY | SPIM_BP_TX_STATUS_REG))
+//    {
+//        SPIM_BP_WriteTxData(FILLBYTE);
+//    }
+//    if(0u != (Timer_SelLow_ReadControlRegister() & Timer_SelLow_CTRL_ENABLE ))
+//    {
+//        Timer_SelLow_Stop();
+//    }
 }
 CY_ISR(ISRDrdyCap)
 {
-    if (0u != (Timer_Drdy_STATUS & Timer_Drdy_STATUS_CAPTURE))
+    uint8 intState = CyEnterCriticalSection();
+    uint8 tempStatus = Timer_Drdy_ReadStatusRegister();
+    if (0u != (tempStatus & Timer_Drdy_STATUS_CAPTURE))
     {
         uint8 tempCap = Timer_Drdy_ReadCapture();
         if (0u == Pin_nDrdy_Read())
@@ -130,13 +145,18 @@ CY_ISR(ISRDrdyCap)
             lastDrdyCap = tempCap;
         }
     }
-    if (0u != (Timer_Drdy_STATUS & Timer_Drdy_STATUS_TC))
+    if (0u != (tempStatus & Timer_Drdy_STATUS_TC))
     {
         if ((0u != Pin_nDrdy_Read()) || (lastDrdyCap < MIN_DRDY_CYCLES))
         {
             timeoutDrdy = TRUE;
         }
+//        if(0u != (Timer_Drdy_ReadControlRegister() & Timer_Drdy_CTRL_ENABLE ))
+//        {
+//            Timer_Drdy_Stop();
+//        }
     }
+    CyExitCriticalSection(intState);
 }
 
 int main(void)
@@ -151,6 +171,8 @@ int main(void)
     uint8 nBuffUsbRx = 0;
     enum readStatus readStatusBP = CHECKDATA;
     
+    memset(buffSPIRead, 0, NUM_SPI_DEV);
+    memset(buffSPIWrite, 0, NUM_SPI_DEV);
 //    uint16 tempSpinTimer = 0; //TODO replace
     
     SPIM_BP_Start();
@@ -168,18 +190,21 @@ int main(void)
             USBUART_CD_PutChar('S'); //TODO  different or eliminate startup message
         }
     }
+    lastDrdyCap = 0xFFu;
     
-    Timer_Tsync_Start();
-    Timer_SelLow_Start();
-    Timer_Drdy_Start();
     Control_Reg_R_Write(0x00u);
 
     Control_Reg_SS_Write(tabSPISel[0u]);
     Control_Reg_CD_Write(1u);
-    lastDrdyCap = 0xFFu;
+    
+    
     isr_R_StartEx(ISRReadSPI);
     isr_W_StartEx(ISRWriteSPI);
-    /* Place your initialization/startup code here (e.g. MyInst_Start()) */
+    isr_C_StartEx(ISRDrdyCap);
+    
+    Timer_Tsync_Start();
+//    Timer_SelLow_Start();
+    Timer_Drdy_Start();
 
 //    cmdBuff[0] = 0x0Fu;
 //    cmdBuff[1] = 0xF0u;
@@ -189,8 +214,7 @@ int main(void)
     
     CyGlobalIntEnable; /* Enable global interrupts. */
     
-    memset(buffSPIRead, 0, NUM_SPI_DEV);
-    memset(buffSPIWrite, 0, NUM_SPI_DEV);
+   
     
     
     for(;;)
@@ -293,21 +317,27 @@ int main(void)
             case CHECKDATA:
                 if(0u == (Timer_Drdy_ReadControlRegister() & Timer_Drdy_CTRL_ENABLE ))
                 {
-                    Timer_Drdy_Start();
                     Control_Reg_CD_Write(0x01u);
                     lastDrdyCap = 0xFFu;
+                    Timer_Drdy_Start();
+                    
                 }
                 if (0u == Pin_nDrdy_Read())
                 {
-                    uint8 tempPeriod = Timer_Drdy_ReadPeriod();
-                    if (tempPeriod > lastDrdyCap) tempPeriod = 0;
+                    uint8 tempLastDrdyCap = lastDrdyCap;
+                    uint8 tempCounter = Timer_Drdy_ReadCounter();
+                    if (tempCounter > tempLastDrdyCap) tempCounter = 0;
                     //if ((0u == Pin_nDrdy_Read()) && (0u != (SPIM_BP_TX_STATUS_REG & SPIM_BP_STS_TX_FIFO_EMPTY)))
-                    if ((lastDrdyCap - tempPeriod) >= MIN_DRDY_CYCLES)
+                    if ((tempLastDrdyCap - tempCounter) >= MIN_DRDY_CYCLES)
                     {
                         uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
                         Control_Reg_CD_Write(0x03u);
-                        SPIM_BP_WriteTxData(FILLBYTE);
                         buffSPIWrite[iSPIDev] = WRAP3INC(tempBuffWrite, SPI_BUFFER_SIZE);
+                        if (0u != (SPIM_BP_STS_TX_FIFO_EMPTY | SPIM_BP_TX_STATUS_REG))
+                        {
+                            SPIM_BP_WriteTxData(FILLBYTE);
+                        }
+                        
                         buffSPI[iSPIDev][tempBuffWrite] = tabSPIHead[iSPIDev];
                         tempBuffWrite=WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
                         if((SPI_BUFFER_SIZE - 1) == tempBuffWrite) //check for 2 byte wrap
@@ -326,7 +356,15 @@ int main(void)
                         readStatusBP = READOUTDATA;
                         timeoutDrdy = FALSE;
                         lastDrdyCap = 0xFFu;
+                        if(0u != (Timer_Drdy_ReadControlRegister() & Timer_Drdy_CTRL_ENABLE ))
+                        {   
+                            Timer_Drdy_Stop();
+                        }
 //                        tempSpinTimer = 0;
+                    }
+                    else
+                    {
+                        lastDrdyCap = tempLastDrdyCap;
                     }
                 }
                 else if (TRUE == timeoutDrdy)
@@ -341,12 +379,15 @@ int main(void)
 //                    }
 //                    if (0x0FFFu == ++tempSpinTimer)
 //                    {
-                    Control_Reg_CD_Write(0u);
+//                    Control_Reg_CD_Write(0u);
                     iSPIDev = WRAPINC(iSPIDev, NUM_SPI_DEV);
                     Control_Reg_SS_Write(tabSPISel[iSPIDev]);
                     Control_Reg_CD_Write(1u);
+                    
                     timeoutDrdy = FALSE;
                     lastDrdyCap = 0xFFu;
+                    Timer_Drdy_Stop();
+                    Timer_Drdy_Start();
 //                    tempSpinTimer = 0;
 //                    }
                 }
@@ -371,7 +412,7 @@ int main(void)
 //                        }
 //                    }
 //                }
-                if (0u != (0x02 & Control_Reg_CD_Read()))
+                if (0u == (0x02 & Control_Reg_CD_Read()))
                 {
                     if (buffSPIRead[iSPIDev] == buffSPIWrite[iSPIDev])
                     {
@@ -430,6 +471,10 @@ int main(void)
             case EORERROR:
             case EORFOUND:  
                 Control_Reg_CD_Write(0u);
+                if(0u != (Timer_SelLow_ReadControlRegister() & Timer_SelLow_CTRL_ENABLE ))
+                {
+                    Timer_SelLow_Stop();
+                }
                 if (0u != (SPIM_BP_STS_SPI_IDLE | SPIM_BP_TX_STATUS_REG))
                 {
                     if (0u !=(SPIM_BP_RX_STATUS_REG & SPIM_BP_STS_RX_FIFO_NOT_EMPTY)) //Readout any further bytes
@@ -462,7 +507,10 @@ int main(void)
                         iSPIDev = WRAPINC(iSPIDev, NUM_SPI_DEV);
                         Control_Reg_SS_Write(tabSPISel[iSPIDev]);
                         Control_Reg_CD_Write(1u);
+                        
                         lastDrdyCap = 0xFFu;
+                        
+//                        Timer_Drdy_Start();
                         readStatusBP = CHECKDATA;
                     }
                 }
