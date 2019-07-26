@@ -48,7 +48,7 @@
 /* The buffer size is equal to the maximum packet size of the IN and OUT bulk
 * endpoints.
 */
-#define USBUART_BUFFER_SIZE (128u)
+#define USBUART_BUFFER_SIZE (64u)
 #define LINE_STR_LENGTH     (20u)
 
 #define NUM_SPI_DEV     (1u)
@@ -156,20 +156,20 @@ CY_ISR(ISRDrdyCap)
     }
     if (0u != (tempStatus & Timer_Drdy_STATUS_TC))
     {
-        if ((0u != Pin_nDrdy_Read()) || (lastDrdyCap < MIN_DRDY_CYCLES))
-        {
+//        if ((0u != Pin_nDrdy_Read()) || (lastDrdyCap < MIN_DRDY_CYCLES))
+//        {
             timeoutDrdy = TRUE;
             lastDrdyCap = Timer_Drdy_ReadPeriod();
-        }
-        else
-        {
+//        }
+//        else
+//        {
 //            Timer_Drdy_WriteCounter(Timer_Drdy_ReadPeriod());
 //        if(0u != (Timer_Drdy_ReadControlRegister() & Timer_Drdy_CTRL_ENABLE ))
 //        {
 //            Timer_Drdy_Stop();
 //        }
 //            Timer_Drdy_Start();
-        }
+//        }
         
     }
     CyExitCriticalSection(intState);
@@ -180,8 +180,10 @@ int main(void)
 //    uint8 status;
 //    uint8 fillByte = 0xA3u;
 //    cmdBuff[CMDBUFFSIZE - 1] = FILLBYTE;
-    uint8 buffUsbTx[USBUART_BUFFER_SIZE];
+    uint8 buffUsbTx[SPI_BUFFER_SIZE];
     uint8 iBuffUsbTx = 0;
+    uint8 buffUsbTxDebug[SPI_BUFFER_SIZE];
+    uint8 iBuffUsbTxDebug = 0;
     uint8 buffUsbRx[USBUART_BUFFER_SIZE];
     uint8 iBuffUsbRx = 0;
     uint8 nBuffUsbRx = 0;
@@ -302,9 +304,9 @@ int main(void)
                 if (cmdValid)
                 {
                     //DEBUG echo command no boundary check
-                    memcpy(buffUsbTx, "++", 2);
-                    memcpy(buffUsbTx +2, curCmd, COMMAND_CHARS);
-                    iBuffUsbTx += 6;
+                    memcpy(buffUsbTxDebug, "++", 2);
+                    memcpy(buffUsbTxDebug +2, curCmd, COMMAND_CHARS);
+                    iBuffUsbTxDebug += 6;
                     //Write 3 times cmd on backplane
                     for (uint8 x=0; x<3; x++)
                     {
@@ -319,9 +321,9 @@ int main(void)
                 else 
                 {
                     //DEBUG echo command no boundary check
-                    memcpy(buffUsbTx, "--", 2);
-                    memcpy(buffUsbTx + 2, curCmd, COMMAND_CHARS);
-                    iBuffUsbTx += 6;
+                    memcpy(buffUsbTxDebug, "--", 2);
+                    memcpy(buffUsbTxDebug + 2, curCmd, COMMAND_CHARS);
+                    iBuffUsbTxDebug += 6;
                 }
                 iCurCmd = 0;    
             }
@@ -338,7 +340,31 @@ int main(void)
                     Timer_Drdy_Start();
                     
 //                }
-                if ((0u == Pin_nDrdy_Read()) && (0u == (Timer_Drdy_ReadStatusRegister() & Timer_Drdy_STATUS_FIFONEMP)))
+                if (TRUE == timeoutDrdy)
+                {  
+//                    if (iSPIDev >= (NUM_SPI_DEV - 1))
+//                    {
+//                        iSPIDev = 0;
+//                    }
+//                    else
+//                    {
+//                        iSPIDev++;
+//                    }
+//                    if (0x0FFFu == ++tempSpinTimer)
+//                    {
+//                    Control_Reg_CD_Write(0u);
+                    iSPIDev = WRAPINC(iSPIDev, NUM_SPI_DEV);
+                    Control_Reg_SS_Write(tabSPISel[iSPIDev]);
+                    Control_Reg_CD_Write(1u);
+                    
+                    timeoutDrdy = FALSE;
+//                    lastDrdyCap = Timer_Drdy_ReadPeriod();
+                    Timer_Drdy_Stop();
+                    Timer_Drdy_Start();
+//                    tempSpinTimer = 0;
+//                    }
+                }
+                else if ((0u == Pin_nDrdy_Read()) )//&& (0u == (Timer_Drdy_ReadStatusRegister() & Timer_Drdy_STATUS_FIFONEMP)))
                 {
                     uint8 tempLastDrdyCap = lastDrdyCap;
 //                    Timer_Drdy_SoftwareCapture();
@@ -382,33 +408,14 @@ int main(void)
                     }
                     else
                     {
+                        buffUsbTxDebug[iBuffUsbTxDebug++] = '=';
+                        buffUsbTxDebug[iBuffUsbTxDebug++] = tempLastDrdyCap;
+                        buffUsbTxDebug[iBuffUsbTxDebug++] = '-';
+                        buffUsbTxDebug[iBuffUsbTxDebug++] = tempCounter;
                         lastDrdyCap = tempLastDrdyCap;
                     }
                 }
-                else if (TRUE == timeoutDrdy)
-                {  
-//                    if (iSPIDev >= (NUM_SPI_DEV - 1))
-//                    {
-//                        iSPIDev = 0;
-//                    }
-//                    else
-//                    {
-//                        iSPIDev++;
-//                    }
-//                    if (0x0FFFu == ++tempSpinTimer)
-//                    {
-//                    Control_Reg_CD_Write(0u);
-                    iSPIDev = WRAPINC(iSPIDev, NUM_SPI_DEV);
-                    Control_Reg_SS_Write(tabSPISel[iSPIDev]);
-                    Control_Reg_CD_Write(1u);
-                    
-                    timeoutDrdy = FALSE;
-//                    lastDrdyCap = Timer_Drdy_ReadPeriod();
-                    Timer_Drdy_Stop();
-                    Timer_Drdy_Start();
-//                    tempSpinTimer = 0;
-//                    }
-                }
+                
                 break;
                 
             case READOUTDATA:
@@ -539,17 +546,32 @@ int main(void)
 //                if (NewTransmit)
 //        {
              /* Service USB CDC when device is configured. */
-        if ((0u != USBUART_CD_GetConfiguration()) && (iBuffUsbTx > 0))
+        if ((0u != USBUART_CD_GetConfiguration()) )//&& (iBuffUsbTx > 0))
         {
  
             /* Wait until component is ready to send data to host. */
             if (USBUART_CD_CDCIsReady())
             {
-                USBUART_CD_PutData(buffUsbTx, iBuffUsbTx);
+                if (iBuffUsbTx > 0)
+                {
+                    for(uint8 x = 0; x < iBuffUsbTx; x += USBUART_BUFFER_SIZE)
+                    {
+                        uint8 iTemp = iBuffUsbTx - x;
+                        iTemp = MIN(iTemp, USBUART_BUFFER_SIZE);
+                        USBUART_CD_PutData(buffUsbTx + x, iTemp);
+                    }
+                }
+                if (iBuffUsbTxDebug > 0)
+                {
+                    USBUART_CD_PutData(buffUsbTxDebug, iBuffUsbTxDebug);
+                }
+                
                 //iBuffUsbTx = 0;
             }
         }
         iBuffUsbTx = 0; //TODO handle missed writes
+        iBuffUsbTxDebug = 0; //TODO handle missed writes
+        
                 /* Send data back to host. */
                
 //                NewTransmit = FALSE;
