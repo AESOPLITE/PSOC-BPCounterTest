@@ -550,7 +550,7 @@ int main(void)
         {
  
             /* Wait until component is ready to send data to host. */
-            if (USBUART_CD_CDCIsReady())
+            if (USBUART_CD_CDCIsReady() && ((iBuffUsbTx > 0) || (iBuffUsbTxDebug > 0)))
             {
                 if (iBuffUsbTx > 0)
                 {
