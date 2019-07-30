@@ -88,7 +88,7 @@ CY_ISR(ISRReadSPI)
 
     uint8 tempnDrdy = Pin_nDrdy_Read();
     uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
-    uint8 tempStatus;
+    uint8 tempStatus = SPIM_BP_ReadStatus();
     if (tempBuffWrite != buffSPIRead[iSPIDev]) //Check if buffer is full
     {
         buffSPIWrite[iSPIDev] = WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
@@ -109,7 +109,7 @@ CY_ISR(ISRReadSPI)
 //                SPIM_BP_WriteTxData(FILLBYTE);
 //            }
         }
-        tempStatus = SPIM_BP_ReadStatus();
+//        tempStatus = SPIM_BP_ReadStatus();
         if (0u != (SPIM_BP_STS_RX_FIFO_NOT_EMPTY & tempStatus))
         {
             buffSPI[iSPIDev][tempBuffWrite] = SPIM_BP_ReadRxData();
@@ -121,7 +121,7 @@ CY_ISR(ISRReadSPI)
     {
         Control_Reg_CD_Write(0x00u);
 //        SPIM_BP_ClearTxBuffer();
-        tempStatus = SPIM_BP_ReadStatus();
+//        tempStatus = SPIM_BP_ReadStatus();
     }
     
     CyExitCriticalSection(intState);
@@ -442,17 +442,17 @@ int main(void)
                     if (buffSPIRead[iSPIDev] == buffSPIWrite[iSPIDev])
                     {
                                             
-//                        uint8 nBytes = SPI_BUFFER_SIZE - buffSPIRead[iSPIDev];
-//                        
-//                        
-//                        memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
-//                        iBuffUsbTx += nBytes;
-//                        if (nBytes < SPI_BUFFER_SIZE)
-//                        {
-//                            nBytes = SPI_BUFFER_SIZE - nBytes;
-//                            memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][0]), nBytes);
-//                            iBuffUsbTx += nBytes;
-//                        }
+                        uint8 nBytes = SPI_BUFFER_SIZE - buffSPIRead[iSPIDev];
+                        
+                        
+                        memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][buffSPIRead[iSPIDev]]), nBytes);
+                        iBuffUsbTx += nBytes;
+                        if (nBytes < SPI_BUFFER_SIZE)
+                        {
+                            nBytes = SPI_BUFFER_SIZE - nBytes;
+                            memcpy((buffUsbTx + iBuffUsbTx), &(buffSPI[iSPIDev][0]), nBytes);
+                            iBuffUsbTx += nBytes;
+                        }
                         readStatusBP = EORERROR;
                     }
                     //if ((1u == Pin_nDrdy_Read()) && (0u != (SPIM_BP_STS_SPI_IDLE | SPIM_BP_TX_STATUS_REG)))
