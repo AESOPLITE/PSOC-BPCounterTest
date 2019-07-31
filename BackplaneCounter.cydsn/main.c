@@ -40,7 +40,7 @@
 /* Project Defines */
 #define FALSE  0
 #define TRUE   1
-#define SPI_BUFFER_SIZE  (128u)
+#define SPI_BUFFER_SIZE  (192u)
 //uint8 cmdBuff[CMDBUFFSIZE];
 //uint8 iCmdBuff = CMDBUFFSIZE - 1;
 
@@ -89,6 +89,7 @@ CY_ISR(ISRReadSPI)
     uint8 tempnDrdy = Pin_nDrdy_Read();
     uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
     uint8 tempStatus = SPIM_BP_ReadStatus();
+    Control_Reg_LoadPulse_Write(0x01);
     if (tempBuffWrite != buffSPIRead[iSPIDev]) //Check if buffer is full
     {
         buffSPIWrite[iSPIDev] = WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
@@ -142,6 +143,7 @@ CY_ISR(ISRDrdyCap)
 {
     uint8 intState = CyEnterCriticalSection();
     uint8 tempStatus = Timer_Drdy_ReadStatusRegister();
+    
     if ((0u != (tempStatus & Timer_Drdy_STATUS_CAPTURE)) && (0u != (tempStatus & Timer_Drdy_STATUS_FIFONEMP)))
     {
         uint8 tempCap;
@@ -214,6 +216,7 @@ int main(void)
 
     Control_Reg_SS_Write(tabSPISel[0u]);
     Control_Reg_CD_Write(1u);
+    
     
     
     isr_R_StartEx(ISRReadSPI);
@@ -375,6 +378,7 @@ int main(void)
                     {
                         uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
                         Control_Reg_CD_Write(0x03u);
+                        Control_Reg_LoadPulse_Write(0x01u);
                         buffSPIWrite[iSPIDev] = WRAP3INC(tempBuffWrite, SPI_BUFFER_SIZE);
                         if (0u != (SPIM_BP_STS_TX_FIFO_EMPTY | SPIM_BP_TX_STATUS_REG))
                         {
@@ -558,8 +562,24 @@ int main(void)
                     {
                         uint8 iTemp = iBuffUsbTx - x;
                         iTemp = MIN(iTemp, USBUART_BUFFER_SIZE);
+//                        uint8 tempS[4] = {'m', x, iTemp, 'n'};
+//                        USBUART_CD_PutData(tempS, 4);
+                        
                         USBUART_CD_PutData(buffUsbTx + x, iTemp);
+                        if (USBUART_BUFFER_SIZE == iTemp)
+                        {
+                            CyDelayUs(53333);
+                        }
                     }
+//                    USBUART_CD_PutChar('#');
+//                    USBUART_CD_PutData((const uint8*)(&(iBuffUsbTx)), 1);
+//                    char tempS[3];
+//                    sprintf(tempS,"%i", iBuffUsbTx);
+//                    USBUART_CD_PutString(tempS);
+//                    USBUART_CD_PutChar('#');
+                    uint8 tempS[3] = {'#', iBuffUsbTx, '#'};
+                    USBUART_CD_PutData(tempS, 3);
+                    
                 }
                 if (iBuffUsbTxDebug > 0)
                 {
