@@ -554,7 +554,7 @@ int main(void)
         {
  
             /* Wait until component is ready to send data to host. */
-            if (USBUART_CD_CDCIsReady() && ((iBuffUsbTx > 0) || (iBuffUsbTxDebug > 0)))
+            if (USBUART_CD_CDCIsReady()) // && ((iBuffUsbTx > 0) || (iBuffUsbTxDebug > 0)))
             {
                 if (iBuffUsbTx > 0)
                 {
@@ -564,12 +564,12 @@ int main(void)
                         iTemp = MIN(iTemp, USBUART_BUFFER_SIZE);
 //                        uint8 tempS[4] = {'m', x, iTemp, 'n'};
 //                        USBUART_CD_PutData(tempS, 4);
-                        
+                        while (0 == USBUART_CD_CDCIsReady());
                         USBUART_CD_PutData(buffUsbTx + x, iTemp);
-                        if (USBUART_BUFFER_SIZE == iTemp)
-                        {
-                            CyDelayUs(53333);
-                        }
+//                        if (USBUART_BUFFER_SIZE == iTemp)
+//                        {
+//                            CyDelayUs(53333);
+//                        }
                     }
 //                    USBUART_CD_PutChar('#');
 //                    USBUART_CD_PutData((const uint8*)(&(iBuffUsbTx)), 1);
@@ -578,19 +578,29 @@ int main(void)
 //                    USBUART_CD_PutString(tempS);
 //                    USBUART_CD_PutChar('#');
                     uint8 tempS[3] = {'#', iBuffUsbTx, '#'};
+                    while (0 == USBUART_CD_CDCIsReady());
                     USBUART_CD_PutData(tempS, 3);
+                    iBuffUsbTx = 0; //TODO handle missed writes
                     
                 }
                 if (iBuffUsbTxDebug > 0)
                 {
+                    while (0 == USBUART_CD_CDCIsReady());
                     USBUART_CD_PutData(buffUsbTxDebug, iBuffUsbTxDebug);
+                    iBuffUsbTxDebug = 0; //TODO handle missed writes
                 }
                 
+                
+        
                 //iBuffUsbTx = 0;
             }
+            
         }
-        iBuffUsbTx = 0; //TODO handle missed writes
-        iBuffUsbTxDebug = 0; //TODO handle missed writes
+        else
+        {
+            iBuffUsbTx = 0; //TODO handle missed writes
+            iBuffUsbTxDebug = 0; //TODO handle missed writes
+        }
         
                 /* Send data back to host. */
                
