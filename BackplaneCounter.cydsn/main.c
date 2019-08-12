@@ -53,6 +53,7 @@
 
 #define NUM_SPI_DEV     (1u)
 uint8 iSPIDev = 0u;
+uint8 iSPIDevPending = 0u;
 #define CTR1_SEL     (0x0Fu)
 const uint8 tabSPISel[NUM_SPI_DEV] = {CTR1_SEL};
 #define CTR1_HEAD     (0xFAu)
@@ -61,6 +62,9 @@ const uint8 frame00FF[2] = {0x00u, 0xFFu};
 uint8 buffSPI[NUM_SPI_DEV][SPI_BUFFER_SIZE];
 uint8 buffSPIRead[NUM_SPI_DEV];
 uint8 buffSPIWrite[NUM_SPI_DEV];
+uint8 buffSPICurHead[NUM_SPI_DEV];
+uint8 buffSPICompleteHead[NUM_SPI_DEV];
+
 enum readStatus {CHECKDATA, READOUTDATA, EORFOUND, EORERROR};
 #define COMMAND_CHARS     (4u)
 uint8 curCmd[COMMAND_CHARS];
@@ -90,11 +94,11 @@ CY_ISR(ISRReadSPI)
     uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
     uint8 tempStatus = SPIM_BP_ReadStatus();
     Control_Reg_LoadPulse_Write(0x01);
-    if (tempBuffWrite != buffSPIRead[iSPIDev]) //Check if buffer is full
+    if (tempBuffWrite != buffSPICurHead[iSPIDev]) //Check if buffer is full
     {
         buffSPIWrite[iSPIDev] = WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
          //if ((0u == Pin_nDrdy_Read()) && (0u != (SPIM_BP_TX_STATUS_REG & SPIM_BP_STS_TX_FIFO_EMPTY)) && (buffSPIWrite[iSPIDev] != buffSPIRead[iSPIDev]))
-        if ((0u != tempnDrdy) || (buffSPIWrite[iSPIDev] == buffSPIRead[iSPIDev]))
+        if ((0u != tempnDrdy) || ((WRAP3INC(buffSPIWrite[iSPIDev], SPI_BUFFER_SIZE)) == buffSPIRead[iSPIDev]))
 //        if ((buffSPIWrite[iSPIDev] == buffSPIRead[iSPIDev]))
         {
             //continueRead = FALSE;
@@ -193,6 +197,14 @@ int main(void)
     
     memset(buffSPIRead, 0, NUM_SPI_DEV);
     memset(buffSPIWrite, 0, NUM_SPI_DEV);
+    memset(buffSPICurHead, 0, NUM_SPI_DEV);
+    memset(buffSPICompleteHead, 0, NUM_SPI_DEV);
+    memset(buffUsbTx, 0, USBUART_BUFFER_SIZE);
+    buffUsbTx[3] = 0x55;
+    buffUsbTx[4] = 0xAA;
+    buffUsbTx[5] = 0x55;
+    buffUsbTx[6] = 0xAA;
+    iBuffUsbTx = 7;
 //    uint16 tempSpinTimer = 0; //TODO replace
     
     SPIM_BP_Start();
@@ -379,6 +391,7 @@ int main(void)
                         uint8 tempBuffWrite = buffSPIWrite[iSPIDev];
                         Control_Reg_CD_Write(0x03u);
                         Control_Reg_LoadPulse_Write(0x01u);
+                        buffSPICurHead[iSPIDev] = buffSPIWrite[iSPIDev];
                         buffSPIWrite[iSPIDev] = WRAP3INC(tempBuffWrite, SPI_BUFFER_SIZE);
                         if (0u != (SPIM_BP_STS_TX_FIFO_EMPTY | SPIM_BP_TX_STATUS_REG))
                         {
@@ -443,7 +456,7 @@ int main(void)
 //                }
                 if (0u == (0x03u & Control_Reg_CD_Read()))
                 {
-                    if (buffSPIRead[iSPIDev] == buffSPIWrite[iSPIDev])
+                    if (buffSPICurHead[iSPIDev] == buffSPIWrite[iSPIDev])
                     {
                                             
                         uint8 nBytes = SPI_BUFFER_SIZE - buffSPIRead[iSPIDev];
@@ -466,6 +479,13 @@ int main(void)
                         
                         uint8 nBytes;
                         
+                        buffSPIWrite[iSPIDev] = WRAP3INC(buffSPIWrite[iSPIDev], SPI_BUFFER_SIZE);
+                        buffSPI[iSPIDev][tempBuffWrite] = 0xFF;
+                        tempBuffWrite = WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
+                        buffSPI[iSPIDev][tempBuffWrite] = 0x00;
+                        tempBuffWrite = WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
+                        buffSPI[iSPIDev][tempBuffWrite] = 0xFF;
+                        tempBuffWrite = WRAPINC(tempBuffWrite, SPI_BUFFER_SIZE);
                         if (buffSPIRead[iSPIDev] >= tempBuffWrite)
                         {
                             nBytes = SPI_BUFFER_SIZE - buffSPIRead[iSPIDev];
@@ -549,6 +569,8 @@ int main(void)
         }
 //                if (NewTransmit)
 //        {
+        
+        //TODO Framing packets
              /* Service USB CDC when device is configured. */
         if ((0u != USBUART_CD_GetConfiguration()) )//&& (iBuffUsbTx > 0))
         {
@@ -580,7 +602,7 @@ int main(void)
                     uint8 tempS[3] = {'#', iBuffUsbTx, '#'};
                     while (0 == USBUART_CD_CDCIsReady());
                     USBUART_CD_PutData(tempS, 3);
-                    iBuffUsbTx = 0; //TODO handle missed writes
+                    iBuffUsbTx = 7; //TODO handle missed writes
                     
                 }
                 if (iBuffUsbTxDebug > 0)
@@ -598,7 +620,7 @@ int main(void)
         }
         else
         {
-            iBuffUsbTx = 0; //TODO handle missed writes
+            iBuffUsbTx = 7; //TODO handle missed writes
             iBuffUsbTxDebug = 0; //TODO handle missed writes
         }
         
