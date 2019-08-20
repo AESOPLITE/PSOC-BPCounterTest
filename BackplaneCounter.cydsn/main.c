@@ -239,6 +239,8 @@ int main(void)
 //    Timer_SelLow_Start();
     Timer_Drdy_Start();
 
+    Counter_BaroPres_Start();
+    Counter_BaroTemp_Start();
 //    cmdBuff[0] = 0x0Fu;
 //    cmdBuff[1] = 0xF0u;
 //    SPIM_BP_WriteTxData(cmdBuff[0]);
@@ -578,6 +580,23 @@ int main(void)
             /* Wait until component is ready to send data to host. */
             if (USBUART_CD_CDCIsReady()) // && ((iBuffUsbTx > 0) || (iBuffUsbTxDebug > 0)))
             {
+                if ((0 == iBuffUsbTx) && (0 == iBuffUsbTxDebug) && (0 != Pin_BaroPres_Read())) // TODO Temporary barometer read, in future should be a Tsync interrupt
+                {
+                    uint32 baroPres = Counter_BaroPres_ReadCapture();
+                    uint32 baroTemp = Counter_BaroTemp_ReadCapture();
+                    buffUsbTxDebug[0] = '^';
+                    iBuffUsbTxDebug++;
+                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (&baroPres), 4);
+                    iBuffUsbTxDebug += 4;
+                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), "^!", 2);
+                    iBuffUsbTxDebug += 2;
+                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (&baroTemp), 4);
+                    iBuffUsbTxDebug += 4;
+                    buffUsbTxDebug[11] = '!';
+                    iBuffUsbTxDebug++;
+                    USBUART_CD_PutData(buffUsbTxDebug, iBuffUsbTxDebug);
+                    iBuffUsbTxDebug = 0;
+                }
                 if (iBuffUsbTx > 0)
                 {
                     for(uint8 x = 0; x < iBuffUsbTx; x += USBUART_BUFFER_SIZE)
