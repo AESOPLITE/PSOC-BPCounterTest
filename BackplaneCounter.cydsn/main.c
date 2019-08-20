@@ -200,11 +200,11 @@ int main(void)
     memset(buffSPICurHead, 0, NUM_SPI_DEV);
     memset(buffSPICompleteHead, 0, NUM_SPI_DEV);
     memset(buffUsbTx, 0, USBUART_BUFFER_SIZE);
-    buffUsbTx[3] = 0x55;
-    buffUsbTx[4] = 0xAA;
-    buffUsbTx[5] = 0x55;
-    buffUsbTx[6] = 0xAA;
-    iBuffUsbTx = 7;
+//    buffUsbTx[3] = 0x55;
+//    buffUsbTx[4] = 0xAA;
+//    buffUsbTx[5] = 0x55;
+//    buffUsbTx[6] = 0xAA;
+//    iBuffUsbTx = 7;
 //    uint16 tempSpinTimer = 0; //TODO replace
     
     SPIM_BP_Start();
@@ -602,7 +602,7 @@ int main(void)
                     uint8 tempS[3] = {'#', iBuffUsbTx, '#'};
                     while (0 == USBUART_CD_CDCIsReady());
                     USBUART_CD_PutData(tempS, 3);
-                    iBuffUsbTx = 7; //TODO handle missed writes
+                    iBuffUsbTx = 0; //TODO handle missed writes
                     
                 }
                 if (iBuffUsbTxDebug > 0)
@@ -620,7 +620,7 @@ int main(void)
         }
         else
         {
-            iBuffUsbTx = 7; //TODO handle missed writes
+            iBuffUsbTx = 0; //TODO handle missed writes
             iBuffUsbTxDebug = 0; //TODO handle missed writes
         }
         
