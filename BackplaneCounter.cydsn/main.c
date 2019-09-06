@@ -93,12 +93,15 @@ typedef struct BaroCoeff {
     const double T5;
 } BaroCoEff;
 
-#define BARO_COUNT_TO_MS (12000)
+#define BARO_COUNT_TO_US (12)
 #define NUM_BARO 1
-const BaroCoEff baroCE[NUM_BARO] = {{.U0 = 1.0, .Y1 = 1.0, .Y2 = 1.0, .Y3 = 1.0, .C1 = 1.0, .C2 = 1.0, .C3 = 1.0, .D1 = 1.0, .D2 = 1.0, .T1 = 1.0, .T2 = 1.0, .T3 = 1.0, .T4 = 1.0, .T5 = 1.0 }};
+//const BaroCoEff baroCE[NUM_BARO] = {{.U0 = 1.0, .Y1 = 1.0, .Y2 = 1.0, .Y3 = 1.0, .C1 = 1.0, .C2 = 1.0, .C3 = 1.0, .D1 = 1.0, .D2 = 1.0, .T1 = 1.0, .T2 = 1.0, .T3 = 1.0, .T4 = 1.0, .T5 = 1.0 }};
+const BaroCoEff baroCE[NUM_BARO] = {{.U0 = 5.875516, .Y1 = -3947.926, .Y2 = -10090.9, .Y3 = 0.0, .C1 = 95.4503, .C2 = 2.982818, .C3 = -135.3036, .D1 = 0.042247, .D2 = 0.0, .T1 = 27.91302, .T2 = 0.873949, .T3 = 21.00155, .T4 = 36.63574, .T5 = 0.0 }};
 double curBaroTemp[NUM_BARO];
 double curBaroPres[NUM_BARO];
-
+uint32 curBaroTempCnt[NUM_BARO];
+uint32 curBaroPresCnt[NUM_BARO];
+uint32 baroReadReady = 0u;
 
 double BaroTempCalc ( double U, const BaroCoEff * bce )
 {
@@ -241,6 +244,8 @@ int main(void)
     memset(buffUsbTx, 0, USBUART_BUFFER_SIZE);
     memset(curBaroTemp, 0, NUM_BARO);
     memset(curBaroPres, 0, NUM_BARO);
+    memset(curBaroTempCnt, 0, NUM_BARO);
+    memset(curBaroPresCnt, 0, NUM_BARO);
 //    buffUsbTx[3] = 0x55;
 //    buffUsbTx[4] = 0xAA;
 //    buffUsbTx[5] = 0x55;
@@ -621,36 +626,47 @@ int main(void)
             /* Wait until component is ready to send data to host. */
             if (USBUART_CD_CDCIsReady()) // && ((iBuffUsbTx > 0) || (iBuffUsbTxDebug > 0)))
             {
-                if ((0 == iBuffUsbTx) && (0 == iBuffUsbTxDebug) && (0 != Pin_BaroPres_Read())) // TODO Temporary barometer read, in future should be a Tsync interrupt
+                if ((0 == iBuffUsbTx) && (0 == iBuffUsbTxDebug) && (0 == Pin_BaroPres_Read()) && (0 == Pin_BaroTemp_Read()) && (0 != baroReadReady)) // TODO Temporary barometer read, in future should be a Tsync interrupt
                 {
-                    uint32 baroPresCnt = Counter_BaroPres_ReadCapture();
-                    uint32 baroTempCnt = Counter_BaroTemp_ReadCapture();
-                    double U = (baroTempCnt / BARO_COUNT_TO_MS) - baroCE[0].U0;
-                    double Tao = (baroPresCnt / BARO_COUNT_TO_MS);
+                    curBaroPresCnt[0] = Counter_BaroPres_ReadCapture();
+                    curBaroTempCnt[0] = Counter_BaroTemp_ReadCapture();
+                    double U = ((double) curBaroTempCnt[0] / BARO_COUNT_TO_US) - baroCE[0].U0;
+                    double Tao = ((double) curBaroPresCnt[0] / BARO_COUNT_TO_US);
                     curBaroTemp[0] = BaroTempCalc(U, baroCE);
                     curBaroPres[0] = BaroPresCalc(Tao, U, baroCE);
                     uint32 curBaroTempInt = (uint32) curBaroTemp[0];
                     uint32 curBaroPresInt = (uint32) curBaroPres[0];
-                    buffUsbTxDebug[0] = '^';
-                    iBuffUsbTxDebug++;
-                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (&baroPresCnt), 4);
-                    iBuffUsbTxDebug += 4;
-                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (curBaroPres), sizeof(double));
-                    iBuffUsbTxDebug += sizeof(double);
-                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (&curBaroPresInt), sizeof(uint32));
-                    iBuffUsbTxDebug += sizeof(uint32);
-                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), "^!", 2);
-                    iBuffUsbTxDebug += 2;
-                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (&baroTempCnt), 4);
-                    iBuffUsbTxDebug += 4;
-                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (curBaroTemp), sizeof(double));
-                    iBuffUsbTxDebug += sizeof(double);
-                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (&curBaroTempInt), sizeof(uint32));
-                    iBuffUsbTxDebug += sizeof(uint32);
-                    buffUsbTxDebug[iBuffUsbTxDebug] = '!';
-                    iBuffUsbTxDebug++;
+//                    buffUsbTxDebug[0] = '^';
+//                    iBuffUsbTxDebug++;
+//                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (curBaroPresCnt), 4);
+//                    iBuffUsbTxDebug += 4;
+//                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (&Tao), sizeof(double));
+//                    iBuffUsbTxDebug += sizeof(double);
+//                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (curBaroPres), sizeof(double));
+//                    iBuffUsbTxDebug += sizeof(double);
+//                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (&curBaroPresInt), sizeof(uint32));
+//                    iBuffUsbTxDebug += sizeof(uint32);
+//                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), "^!", 2);
+//                    iBuffUsbTxDebug += 2;
+//                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (curBaroTempCnt), 4);
+//                    iBuffUsbTxDebug += 4;
+//                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (&U), sizeof(double));
+//                    iBuffUsbTxDebug += sizeof(double);
+//                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (curBaroTemp), sizeof(double));
+//                    iBuffUsbTxDebug += sizeof(double);
+//                    memcpy((buffUsbTxDebug + iBuffUsbTxDebug), (&curBaroTempInt), sizeof(uint32));
+//                    iBuffUsbTxDebug += sizeof(uint32);
+//                    buffUsbTxDebug[iBuffUsbTxDebug] = '!';
+//                    iBuffUsbTxDebug++;
+                    iBuffUsbTxDebug = sprintf( (char *) buffUsbTxDebug, "^ %u, %f, %f^! %u, %f, %f!", curBaroPresCnt[0], Tao, curBaroPres[0], curBaroTempCnt[0], U, curBaroTemp[0]);
                     USBUART_CD_PutData(buffUsbTxDebug, iBuffUsbTxDebug);
                     iBuffUsbTxDebug = 0;
+                    baroReadReady = 0u;
+                    
+                }
+                else if (0 != Pin_BaroPres_Read())
+                {
+                    baroReadReady = 1u;
                 }
                 if (iBuffUsbTx > 0)
                 {
