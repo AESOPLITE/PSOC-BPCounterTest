@@ -374,8 +374,14 @@ int main(void)
                     for (uint8 x=0; x<3; x++)
                     {
                         UART_Cmd_PutArray(START_COMMAND, START_COMMAND_SIZE);
+                        memcpy(buffUsbTxDebug + iBuffUsbTxDebug, START_COMMAND, START_COMMAND_SIZE);
+                        iBuffUsbTxDebug += START_COMMAND_SIZE;
                         UART_Cmd_PutArray(curCmd, COMMAND_CHARS);
+                        memcpy(buffUsbTxDebug + iBuffUsbTxDebug, curCmd, COMMAND_CHARS);
+                        iBuffUsbTxDebug += COMMAND_CHARS;
                         UART_Cmd_PutArray(END_COMMAND, END_COMMAND_SIZE);
+                        memcpy(buffUsbTxDebug + iBuffUsbTxDebug, END_COMMAND, END_COMMAND_SIZE);
+                        iBuffUsbTxDebug += END_COMMAND_SIZE;
                     }
                     //Unix style line end
                     UART_Cmd_PutChar(CR);
@@ -630,8 +636,8 @@ int main(void)
                 {
                     curBaroPresCnt[0] = Counter_BaroPres_ReadCapture();
                     curBaroTempCnt[0] = Counter_BaroTemp_ReadCapture();
-                    double U = ((double) curBaroTempCnt[0] / BARO_COUNT_TO_US) - baroCE[0].U0;
-                    double Tao = ((double) curBaroPresCnt[0] / BARO_COUNT_TO_US);
+                    double U = (double)((double) curBaroTempCnt[0] / (double) BARO_COUNT_TO_US) - baroCE[0].U0;
+                    double Tao = (double)((double) curBaroPresCnt[0] / (double) BARO_COUNT_TO_US);
                     curBaroTemp[0] = BaroTempCalc(U, baroCE);
                     curBaroPres[0] = BaroPresCalc(Tao, U, baroCE);
                     uint32 curBaroTempInt = (uint32) curBaroTemp[0];
@@ -658,7 +664,14 @@ int main(void)
 //                    iBuffUsbTxDebug += sizeof(uint32);
 //                    buffUsbTxDebug[iBuffUsbTxDebug] = '!';
 //                    iBuffUsbTxDebug++;
-                    iBuffUsbTxDebug = sprintf( (char *) buffUsbTxDebug, "^ %u, %f, %f^! %u, %f, %f!", curBaroPresCnt[0], Tao, curBaroPres[0], curBaroTempCnt[0], U, curBaroTemp[0]);
+                    Tao = 1.1; 
+                    curBaroPres[0] = 22.22; 
+                    U = 333.333;
+                    curBaroTemp[0] = 4444.4444;
+                    Tao = 2.3E-3;//08;
+                    U = 1.7E+3;//08;
+                    U /= Tao;
+                    iBuffUsbTxDebug = sprintf( (char *) buffUsbTxDebug, "^ %lu, %f, %f^! %lu, %f, %f!", curBaroPresCnt[0], Tao, curBaroPres[0], curBaroTempCnt[0], U, curBaroTemp[0]); //1.1, 22.22, curBaroTempCnt[0], 333.333, 4444.4444);
                     USBUART_CD_PutData(buffUsbTxDebug, iBuffUsbTxDebug);
                     iBuffUsbTxDebug = 0;
                     baroReadReady = 0u;
